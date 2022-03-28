@@ -1,0 +1,188 @@
+Script started on 2021-11-11 23:34:24-05:00 [TERM="xterm" TTY="/dev/pts/0" COLUMNS="100" LINES="35"]
+(base) ]0;wp22@gold01: ~/Downloads/cs374/homework06wp22@gold01:~/Downloads/cs374/homework06$ cat calcPI2.c pthreadReduction.h 
+/* calcPI2.c calculates PI using POSIX threads.
+ * Since PI == 4 * arctan(1), and arctan(x) is the 
+ *  integral from 0 to x of (1/(1+x*x),
+ *  the for loop below approximates that integration.
+ *
+ * Joel Adams, Calvin College, Fall 2013. 
+ *
+ * Usage: ./calcPI2 [numIntervals] [numThreads]
+ * 
+ * Modified by: Won Seok Park (Using reduction instead of mutual exclusion to prevent race condition)
+ * Modified date: November 6, 2021 
+ * 
+ * CS374 HIGH PERFORMANCE COMPUTING, CALVIN UNIVERSITY
+ */
+
+#include "pthreadReduction.h" //
+#include <stdio.h>                 // printf(), fprintf(), etc.
+#include <stdlib.h>                // strtoul(), exit(), ...
+#include <pthread.h>               // pthreads
+#include <mpi.h>                   // MPI_Wtime()
+
+// global variables (shared by all threads 
+volatile long double pi = 0.0;       // our approximation of PI 
+pthread_mutex_t      piLock;         // how we synchronize writes to 'pi' 
+long double          intervals = 0;  // how finely we chop up the integration 
+unsigned long        numThreads = 0; // how many threads we use 
+long double*         reduceArray; 
+
+/* compute PI using the parallel for loop pattern
+ * Parameters: arg, a void* 
+ * Preconditions: 
+ *   - non-locals intervals and numThreads are defined.
+ *   - arg contains the address of our thread's ID.
+ * Postcondition: non-local pi contains our approximation of PI.
+ */
+void * computePI(void * arg)
+{
+    long double   x,
+                  width, 
+                  localSum = 0;
+    unsigned long i,
+                  threadID = *((unsigned long *)arg);
+
+    width = 1.0 / intervals;
+
+    for(i = threadID ; i < intervals; i += numThreads) {
+        x = (i + 0.5) * width;
+        localSum += 4.0 / (1.0 + x*x); 
+    }
+
+    localSum *= width; 
+
+	reduceArray[threadID] = localSum;
+
+	pi = pthreadReductionSum(reduceArray, numThreads, threadID);  
+
+    return NULL;
+} 
+
+/* process the command-line arguments
+ * Parameters: argc, an int; and argv a char**.
+ * Postcondition:  
+ *  - non-locals intervals and numThreads have been defined.  
+ *     according to the values the user specified when
+ *     calcPI2 was invoked. 
+ */
+void processCommandLine(int argc, char ** argv) {
+   if ( argc == 3 ) {
+      intervals = strtoul(argv[1], 0, 10); 
+      numThreads = strtoul(argv[2], 0, 10); 
+   } else if ( argc == 2 ) {
+      intervals = strtoul(argv[1], 0, 10);
+      numThreads = 1;
+   } else if ( argc == 1 ) {
+      intervals = 1;
+      numThreads = 1;
+   } else {
+      fprintf(stderr, "\nUsage: calcPI2 [intervals] [numThreads]\n\n");
+      exit(1);
+   }
+}
+      
+
+int main(int argc, char **argv) {
+    pthread_t* threads;            // dynamic array of threads 
+    unsigned long  * threadID;      // dynamic array of thread id #s 
+    unsigned long i;                // loop control variable 
+    double startTime = 0,           // timing variables
+           stopTime = 0;
+
+    MPI_Init(&argc,&argv);
+
+    processCommandLine(argc, argv);
+
+    threads = malloc(numThreads*sizeof(pthread_t));
+    threadID = malloc(numThreads*sizeof(unsigned long));
+    reduceArray = malloc(numThreads*sizeof(long double));
+    pthread_mutex_init(&piLock, NULL);
+
+    startTime = MPI_Wtime();
+
+    for (i = 0; i < numThreads; i++) {   // fork threads
+        threadID[i] = i;
+        pthread_create(&threads[i], NULL, computePI, threadID+i);
+    }
+
+    for (i = 0; i < numThreads; i++) {   // join them
+        pthread_join(threads[i], NULL);
+    }
+    stopTime = MPI_Wtime();
+
+    printf("Estimation of pi is %32.30Lf in %lf secs\n", pi, stopTime - startTime);
+    printf("(actual pi value is 3.141592653589793238462643383279...)\n"); 
+   
+    pthread_mutex_destroy(&piLock);
+    free(threads);
+    free(threadID);
+    return 0;
+}
+
+// This reduction function only handles binary values. I've made an attempt to make it work with any number of threads, 
+// but I couldn't make it work and it was consuming too much time, so decided to use this for current project as it appeared to not impact processing time in meaningful scale
+// I will try to see if I could make different approach to handle any number of threads in the future
+
+
+
+/* 
+
+ * pthreadReduction to implement thread-safe reduction method
+
+ * to prevent race condition.
+
+ *
+
+ * Usage: ./calcPI2 [numIntervals] [numThreads]
+
+ * 
+
+ * Modified by: Won Seok Park
+
+ * Modified date: November 6, 2021 
+
+ * 
+
+ * CS374 HIGH PERFORMANCE COMPUTING, CALVIN UNIVERSITY
+
+ */
+
+
+
+#include "barrier.h"
+
+
+
+long double pthreadReductionSum( long double reduceArray[], unsigned int numThreads, unsigned int id) {
+
+	for ( int i=2; i <= numThreads; i*=2 ) {
+
+		// Wait for all threads to reach here
+
+		pthreadBarrier(numThreads);
+
+		// If id is collecting thread (multiple of 2, 4, 8, 16...)
+
+		if ( id % i == 0 ) {
+
+			// Collect values from appropriate threads
+
+			reduceArray[id] += reduceArray[id + (i/2)];
+
+		}
+
+	}
+
+	barrierCleanup();
+
+	return reduceArray[0];
+
+}(base) ]0;wp22@gold01: ~/Downloads/cs374/homework06wp22@gold01:~/Downloads/cs374/homework06$ ./calcPI2           make
+make: 'calcPI2' is up to date.
+(base) ]0;wp22@gold01: ~/Downloads/cs374/homework06wp22@gold01:~/Downloads/cs374/homework06$ ./calcPI2 1000000000 4
+Estimation of pi is 3.141592653589793591745876755184 in 1.551357 secs
+(actual pi value is 3.141592653589793238462643383279...)
+(base) ]0;wp22@gold01: ~/Downloads/cs374/homework06wp22@gold01:~/Downloads/cs374/homework06$ exit
+
+Script done on 2021-11-11 23:35:19-05:00 [COMMAND_EXIT_CODE="0"]

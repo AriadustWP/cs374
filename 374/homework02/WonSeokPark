@@ -1,0 +1,80 @@
+Script started on 2021-09-14 20:13:28-04:00 [TERM="xterm" TTY="/dev/pts/0" COLUMNS="100" LINES="35"]
+(base) ]0;wp22@gold01: ~/Downloads/cs374/homework02wp22@gold01:~/Downloads/cs374/homework02$ make
+mpicc -Wall -ansi -pedantic -std=c99  messagePassingMW.c -o messagePassingMW
+(base) ]0;wp22@gold01: ~/Downloads/cs374/homework02wp22@gold01:~/Downloads/cs374/homework02$ cat messagePassingMW.c 
+/*
+ * Won Seok Park
+ * CS 374: Fall 2021
+ * Sept. 14th 2021
+ *
+ * messagePassingMW.c
+ * Combination of message passing and master-worker pattern
+ *   where master process starts the message passing and calculates
+ *   total processing time, and worker processes pass a message down to the 
+ *   next process until last process sends message back to the master process
+ *   to complete the ring
+ */
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <mpi.h>
+
+int main(int argc, char** argv) {
+
+  const int SIZE = (MPI_MAX_PROCESSOR_NAME * 4) * sizeof(int);
+
+  //TODO: use malloc for array allocation
+  int id = -1, numWorkers = -1;
+  MPI_Status status;
+
+  MPI_Init(&argc, &argv);
+  MPI_Comm_rank(MPI_COMM_WORLD, &id);
+  MPI_Comm_size(MPI_COMM_WORLD, &numWorkers);
+
+  // Dynamically allocate memory to an answer array 
+  int * ansArray = (int*) malloc(SIZE);
+
+  if ( id == 0 ) {  // process 0 is the master 
+    // Start measuring time
+    double startTime = MPI_Wtime();
+
+    ansArray[id] = id;
+    MPI_Send(ansArray, id+1, MPI_INT, id+1, 1, MPI_COMM_WORLD);
+    MPI_Recv(ansArray, numWorkers, MPI_INT, numWorkers - 1, 1, MPI_COMM_WORLD, &status);
+
+    // Calculate processing time
+    double finishTime = MPI_Wtime() - startTime;
+
+    // Print entire array
+    for (int i = 0; i <numWorkers; i++) {
+        printf("%d ",ansArray[i]);
+    }
+
+    printf("\nDone in %f seconds\n", finishTime);
+
+  } else if ( id == numWorkers - 1) { // Last id sends message back to the master process
+    MPI_Recv(ansArray, id, MPI_INT, id-1, 1, MPI_COMM_WORLD, &status);
+    ansArray[id] = id;
+    MPI_Send(ansArray, id+1, MPI_INT, 0, 1, MPI_COMM_WORLD);
+  } else { // processes with ids > 0 are workers
+    MPI_Recv(ansArray, id, MPI_INT, id-1, 1, MPI_COMM_WORLD, &status);
+    ansArray[id] = id;
+    MPI_Send(ansArray, id+1, MPI_INT, id+1, 1, MPI_COMM_WORLD);
+  }
+
+  // Free up the memory
+  free(ansArray);
+  MPI_Finalize();
+  return 0;
+}
+
+(base) ]0;wp22@gold01: ~/Downloads/cs374/homework02wp22@gold01:~/Downloads/cs374/homework02$ mpirun -np 8 -machinefile ../hosts ./messagePassingMW
+
+0 1 2 3 4 5 6 7 
+Done in 0.006764 seconds
+(base) ]0;wp22@gold01: ~/Downloads/cs374/homework02wp22@gold01:~/Downloads/cs374/homework02$ [Kcat slurm-197326.out 
+0 1 2 3 4 5 6 7 
+Done in 0.000312 seconds
+(base) ]0;wp22@gold01: ~/Downloads/cs374/homework02wp22@gold01:~/Downloads/cs374/homework02$ exit
+
+Script done on 2021-09-14 20:14:45-04:00 [COMMAND_EXIT_CODE="0"]
